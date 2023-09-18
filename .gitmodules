@@ -1,0 +1,2 @@
+[submodule "./graphql-parser"]
+	url = https://github.com/semtexzv/graphql-parser

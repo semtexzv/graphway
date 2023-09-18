@@ -1,0 +1,326 @@
+schema
+  @link(url: "https://specs.apollo.dev/link/v1.0")
+  @link(url: "https://specs.apollo.dev/join/v0.3", for: EXECUTION)
+{
+  query: Query
+  subscription: Subscription
+}
+
+directive @join__enumValue(graph: join__Graph!) repeatable on ENUM_VALUE
+
+directive @join__field(graph: join__Graph, requires: join__FieldSet, provides: join__FieldSet, type: String, external: Boolean, override: String, usedOverridden: Boolean) repeatable on FIELD_DEFINITION | INPUT_FIELD_DEFINITION
+
+directive @join__graph(name: String!, url: String!) on ENUM_VALUE
+
+directive @join__implements(graph: join__Graph!, interface: String!) repeatable on OBJECT | INTERFACE
+
+directive @join__type(graph: join__Graph!, key: join__FieldSet, extension: Boolean! = false, resolvable: Boolean! = true, isInterfaceObject: Boolean! = false) repeatable on OBJECT | INTERFACE | UNION | ENUM | INPUT_OBJECT | SCALAR
+
+directive @join__unionMember(graph: join__Graph!, member: String!) repeatable on UNION
+
+directive @link(url: String, as: String, for: link__Purpose, import: [link__Import]) repeatable on SCHEMA
+
+union Asset
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+  @join__unionMember(graph: BITCOIN, member: "NativeAsset")
+  @join__unionMember(graph: ETH, member: "NativeAsset")
+  @join__unionMember(graph: BITCOIN, member: "FungibleAsset")
+  @join__unionMember(graph: ETH, member: "FungibleAsset")
+  @join__unionMember(graph: BITCOIN, member: "NftAsset")
+  @join__unionMember(graph: ETH, member: "NftAsset")
+ = NativeAsset | FungibleAsset | NftAsset
+
+type Balance
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  """Address, to which the balance belongs"""
+  add: String!
+
+  """Contract (ERC20, NFT),"""
+  ctr: String
+
+  """TokenID - Relevant for NFTs"""
+  tok: String
+
+  """Actual balance"""
+  amt: String!
+
+  """Parsed asset information, dynamically fetched"""
+  ast: Asset!
+}
+
+type BalanceWithCursor
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  """Cursor to use in subsequent API calls"""
+  cur: String!
+
+  """Requested object"""
+  obj: Balance!
+}
+
+type Evm
+  @join__type(graph: ETH)
+{
+  status: Status!
+  transaction(blk: Int!, idx: Int!): EVMTransaction!
+  byhash(hash: String!): EVMTransaction!
+  transactions(addr: String!, last: Int! = 100, before: String): [EVMTransactionWithCursor!]!
+  balances(addr: String!, first: Int! = 100, after: String): [BalanceWithCursor!]!
+  contractNfts(contract: String!, first: Int! = 100, after: String): [NftWithCursor!]!
+}
+
+type EVMTransaction
+  @join__type(graph: ETH)
+{
+  """Transaction hash"""
+  hash: String!
+
+  """Block, in which this transaction was mined"""
+  blk: Int!
+
+  """Transaction index within block"""
+  idx: Int!
+
+  """Source address"""
+  src: String!
+
+  """Destination (or deployed contract) address"""
+  dst: String!
+
+  """Value atached to transaction."""
+  amt: String!
+
+  """Transfers, which occured as part of the transaction execution"""
+  transfers: [Transfer!]!
+
+  """
+  !!ALPHA - might increase latency!!
+  The input data provided to transaction. It's only available if transaction was
+  a contract deployment or a contract method call.
+  """
+  inp: String
+
+  """
+  !!ALPHA - might increase latency!!
+  If this transaction was a contract call, and we have the ABI, this is the signature of called
+  function.
+  """
+  sig: [String!]!
+}
+
+type EVMTransactionWithCursor
+  @join__type(graph: ETH)
+{
+  """Cursor to use in subsequent API calls"""
+  cur: String!
+
+  """Requested object"""
+  obj: EVMTransaction!
+}
+
+type FungibleAsset
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  chain: String!
+
+  """Contract of the fungible token"""
+  ctr: String!
+
+  """Fungible token name"""
+  nme: String
+
+  """Fungible token symbol"""
+  sym: String
+
+  """Number of decimals,"""
+  dec: Int
+}
+
+scalar join__FieldSet
+
+enum join__Graph {
+  BITCOIN @join__graph(name: "bitcoin", url: "http://btcindex:3005/graphql")
+  ETH @join__graph(name: "eth", url: "http://ethindex:3000/graphql")
+  OFFCHAIN @join__graph(name: "offchain", url: "http://offchain:3001/graphql")
+}
+
+"""A scalar that can represent any JSON value."""
+scalar JSON
+  @join__type(graph: OFFCHAIN)
+
+scalar link__Import
+
+enum link__Purpose {
+  """
+  `SECURITY` features provide metadata necessary to securely resolve fields.
+  """
+  SECURITY
+
+  """
+  `EXECUTION` features provide metadata necessary for operation execution.
+  """
+  EXECUTION
+}
+
+type NativeAsset
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  chain: String!
+
+  """Number of decimals,"""
+  dec: Int
+}
+
+type Nft
+  @join__type(graph: ETH)
+  @join__type(graph: OFFCHAIN, key: "tok uri", extension: true)
+{
+  """Contract of the NFT"""
+  ctr: String! @join__field(graph: ETH)
+
+  """NFT token ID"""
+  tok: String!
+
+  """URI of the token metadata"""
+  uri: String
+  nme: String @join__field(graph: OFFCHAIN)
+  dsc: String @join__field(graph: OFFCHAIN)
+  sym: String @join__field(graph: OFFCHAIN)
+  img: String @join__field(graph: OFFCHAIN)
+  anm: String @join__field(graph: OFFCHAIN)
+  att: JSON @join__field(graph: OFFCHAIN)
+}
+
+type NftAsset
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+  @join__type(graph: OFFCHAIN, key: "tok uri", extension: true)
+{
+  chain: String! @join__field(graph: BITCOIN) @join__field(graph: ETH)
+
+  """Contract of the NFT"""
+  ctr: String! @join__field(graph: BITCOIN) @join__field(graph: ETH)
+
+  """NFT token ID"""
+  tok: String!
+
+  """URI of the token metadata"""
+  uri: String
+
+  """Number of decimals,"""
+  dec: Int @join__field(graph: BITCOIN) @join__field(graph: ETH)
+  nme: String @join__field(graph: OFFCHAIN)
+  dsc: String @join__field(graph: OFFCHAIN)
+  sym: String @join__field(graph: OFFCHAIN)
+  img: String @join__field(graph: OFFCHAIN)
+  anm: String @join__field(graph: OFFCHAIN)
+  att: JSON @join__field(graph: OFFCHAIN)
+}
+
+type NftWithCursor
+  @join__type(graph: ETH)
+{
+  """Cursor to use in subsequent API calls"""
+  cur: String!
+
+  """Requested object"""
+  obj: Nft!
+}
+
+type Query
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+  @join__type(graph: OFFCHAIN)
+{
+  """Returns information from bitcoin mainnet. Warning, unstable."""
+  bitcoin: Utxo! @join__field(graph: BITCOIN)
+  ethereum: Evm! @join__field(graph: ETH)
+}
+
+type Status
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  """The last indexed block"""
+  blk: Int!
+}
+
+type Subscription
+  @join__type(graph: ETH)
+{
+  transactions(addr: String!, after: String): EVMTransactionWithCursor!
+}
+
+type Transfer
+  @join__type(graph: BITCOIN)
+  @join__type(graph: ETH)
+{
+  """Source address"""
+  src: String
+
+  """Destination address"""
+  dst: String
+
+  """Contract (ERC20, ERC721), which this transfer affects"""
+  ctr: String
+
+  """TokenID of the NFT that this transfer affects"""
+  tok: String
+
+  """Transfer value"""
+  amt: String!
+
+  """Parsed asset information, dynamically fetched"""
+  ast: Asset!
+}
+
+type Utxo
+  @join__type(graph: BITCOIN)
+{
+  status: Status!
+  transaction(blk: Int!, idx: Int!): UTXOTransaction!
+  byhash(hash: String!): UTXOTransaction!
+  transactions(addr: String!, last: Int! = 100, before: String): [UTXOTransactionWithCursor!]!
+  balances(addr: String!, first: Int! = 100, after: String): [BalanceWithCursor!]!
+}
+
+type UTXOTransaction
+  @join__type(graph: BITCOIN)
+{
+  """Transaction hash"""
+  hash: String!
+
+  """Block, in which this transaction was mined"""
+  blk: Int!
+
+  """Transaction index within block"""
+  idx: Int!
+
+  """Source address"""
+  src: String
+
+  """Destination (or deployed contract) address"""
+  dst: String
+
+  """Value atached to transaction."""
+  amt: String!
+
+  """Transfers, which occured as part of the transaction execution"""
+  transfers: [Transfer!]!
+}
+
+type UTXOTransactionWithCursor
+  @join__type(graph: BITCOIN)
+{
+  """Cursor to use in subsequent API calls"""
+  cur: String!
+
+  """Requested object"""
+  obj: UTXOTransaction!
+}
