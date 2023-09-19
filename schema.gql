@@ -146,7 +146,7 @@ scalar join__FieldSet
 enum join__Graph {
   BITCOIN @join__graph(name: "bitcoin", url: "http://btcindex:3005/graphql")
   ETH @join__graph(name: "eth", url: "http://ethindex:3000/graphql")
-  OFFCHAIN @join__graph(name: "offchain", url: "http://offchain:3001/graphql")
+   OFFCHAIN @join__graph(name: "offchain", url: "http://offchain:3001/graphql")
 }
 
 """A scalar that can represent any JSON value."""

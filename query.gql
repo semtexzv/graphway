@@ -1,0 +1,18 @@
+query {
+  ethereum {
+    status { blk }
+    transaction(blk: 0, idx: 0){
+      hash
+      transfers {
+        ast {
+          ... on NftAsset {
+            uri
+            ctr
+            nme
+          }
+        }
+      }
+    }
+  }
+
+}

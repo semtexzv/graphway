@@ -1,65 +1,25 @@
+pub mod fed;
 pub mod pass;
 
+use crate::fed::{Graph, ObjectT, Plan, Planner, TypeT};
 use axum::extract::State;
 use axum::routing::post;
 use axum::Json;
 use clap::Parser;
-use graphql_parser::query::{Directive, Document, Mutation, OperationDefinition, Query, Selection, Subscription, Text, Type};
-use graphql_parser::schema::{Definition, DirectiveDefinition, EnumValue, SchemaDefinition, TypeDefinition};
+use graphql_parser::query::{
+    Mutation, OperationDefinition, Query, Selection, SelectionSet, Subscription, Text, Type,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::future::Future;
-use std::marker::PhantomData;
+use std::collections::{HashMap, LinkedList};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::PathBuf;
-use std::sync::Arc;
+use graphql_parser::parse_query;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Args {
     #[arg(short, long)]
     pub schema: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct SubGraph<'a, T: Text<'a>> {
-    pub key: T,
-    pub name: String,
-    pub url: String,
-    _p: PhantomData<&'a ()>,
-}
-
-#[derive(Debug, Clone)]
-struct Field<'a, T: Text<'a>> {
-    graphs: Vec<T>,
-    rtype: Type<'a, T>,
-    args: Vec<(T, Type<'a, T>)>,
-}
-
-type Fields<'a, T> = HashMap<T, Field<'a, T>>;
-
-#[derive(Debug, Clone)]
-struct JoinType<'a, T> {
-    graph: T,
-    keys: String,
-    _p: PhantomData<&'a ()>,
-}
-
-#[derive(Debug, Clone)]
-struct Object<'a, T: Text<'a>> {
-    graphs: Vec<JoinType<'a, T>>,
-    fields: Fields<'a, T>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Graph<'a, T: Text<'a>> {
-    pub schema: SchemaDefinition<'a, T>,
-    pub directives: HashMap<T, DirectiveDefinition<'a, T>>,
-    pub types: HashMap<T, TypeDefinition<'a, T>>,
-
-    pub query: Option<TypeDefinition<'a, T>>,
-    pub objects: HashMap<T, Object<'a, T>>,
-    pub subgraphs: HashMap<T, SubGraph<'a, T>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,14 +34,44 @@ type Variables = HashMap<String, serde_json::Value>;
 type StateGraph = State<&'static Graph<'static, &'static str>>;
 type SGraph = &'static Graph<'static, &'static str>;
 
+pub enum Op {}
+
+struct ResolveKey<'a, T: Text<'a>> {
+    graph: &'static str,
+    keys: graphql_parser::query::SelectionSet<'a, T>,
+}
+
 async fn handle_query<'a>(graph: SGraph, req: Query<'a, &'a str>, vars: &Variables) {
-    let Some(graph) = &graph.query else {
+    let Some(qtype) = &graph.query else {
         panic!("Query is not available in this supergraph");
     };
 
+    let mut exec: HashMap<ResolveKey<'a, &'a str>, SelectionSet<'static, String>> =
+        Default::default();
+
     for sel in &req.selection_set.items {
         match sel {
-            Selection::Field(f) => {}
+            Selection::Field(fsel) => {
+                let Some(fdef) = qtype.fields.get(fsel.name) else {
+                    panic!("Did not find field")
+                };
+
+                // Recursively
+                // Go through every field,
+                // IF - it is in current subgraph, add it to subgraph query
+                // IF it is in other subgraph, and it is resolvable there (
+                // create a subsequent request keyed on (subgraph, key fields)
+                // Add that field to that request
+
+                match &fdef.field_type {
+                    Type::NamedType(n) => {
+                        // if let Some(obj) = graph.objects.get()
+                        // let obj = graph.types.get(n).expect("Unknown type");
+                    }
+                    Type::ListType(i) => {}
+                    Type::NonNullType(n, _) => {}
+                }
+            }
             Selection::FragmentSpread(_) => {}
             Selection::InlineFragment(_) => {}
         }
@@ -137,129 +127,24 @@ async fn main() {
     let parsed =
         graphql_parser::parse_schema::<&'static str>(schema).expect("Could not parse schema");
 
-    let mut schema = None;
-    let mut directives = HashMap::default();
-    let mut types = HashMap::default();
+    let graph = fed::supergraph(parsed);
 
-    for it in parsed.definitions.into_iter() {
-        match it {
-            Definition::SchemaDefinition(it) => schema = Some(it),
-            Definition::SchemaExtension(_) => panic!("Schema extension not supported"),
-            Definition::TypeDefinition(t) => {
-                types.insert(*t.name(), t);
-            }
-            Definition::TypeExtension(e) => panic!("All extensions must be resolved"),
-            Definition::DirectiveDefinition(d) => {
-                directives.insert(d.name, d);
-            }
-        }
-    }
+    let graph = Box::leak(Box::new(graph));
 
-    let schema = schema.expect("Missing schema definition");
+    let mut planner = Planner::<&str>::new(graph, graph.query.as_ref().unwrap());
 
-    let query = if let Some(query) = schema.query {
-        types.iter().filter(|v| *v.0 == query).map(|v| v.1.clone()).next()
-    } else {
-        None
+    let q = parse_query::<&str>(include_str!("../query.gql")).unwrap();
+    let q = pass::frag::inline_fragments(q, None);
+    let done = match q {
+        OperationDefinition::Query(q) => {
+            let typ = TypeT::Object(graph.query.clone().unwrap());
+            planner.node(&typ, q.selection_set)
+        },
+        _ => panic!("aa")
     };
 
-    let mut objects: HashMap<_, _> = HashMap::default();
-    for (ident, typ) in &types {
-        match typ {
-            TypeDefinition::Scalar(_) => {}
-            TypeDefinition::Object(o) => {
-                let graphs = o.directives
-                    .iter()
-                    .filter(|i| i.name == "join__type")
-                    .map(|d| {
-                        let graph = d.arguments
-                            .iter()
-                            .filter(|a| a.0 == "graph")
-                            .map(|a| {
-                                *a.1.as_variable()
-                                    .expect("join__type.graph must be an identifier")
-                            })
-                            .next()
-                            .unwrap();
-                        JoinType {
-                            graph,
-                            keys: "".to_string(),
-                            _p: Default::default(),
-                        }
-                    })
-                    .collect();
+    panic!("DONE: {}", done.to_string());
 
-                objects.insert(o.name, Object {
-                    graphs,
-                    fields: Default::default(),
-                });
-            }
-            TypeDefinition::Interface(_) => {}
-            TypeDefinition::Union(_) => {}
-            TypeDefinition::Enum(_) => {}
-            TypeDefinition::InputObject(_) => {}
-        }
-    }
-
-
-    let mut graph = Graph {
-        schema,
-        directives,
-        types,
-
-        query,
-        objects,
-        subgraphs: HashMap::default(),
-    };
-
-    let subs = graph
-        .types
-        .get("join__Graph")
-        .expect("Missing join__Graph enum")
-        .as_enum()
-        .expect("join__graph must be an enum");
-
-    for val in &subs.values {
-        let dir = val
-            .directives
-            .iter()
-            .find(|d| d.name == "join__graph")
-            .expect("Missing join_graph directive on join__Graph enum variant");
-
-        let name = dir
-            .arguments
-            .iter()
-            .filter(|it| it.0 == "name")
-            .next()
-            .expect("Missing join__graph.name")
-            .1
-            .as_string()
-            .expect("join__graph.name is supposed to be a string")
-            .clone();
-
-        let url = dir
-            .arguments
-            .iter()
-            .filter(|it| it.0 == "url")
-            .next()
-            .expect("Missing join__graph.url")
-            .1
-            .as_string()
-            .expect("join__graph.name is supposed to be a string")
-            .clone();
-
-        graph.subgraphs.insert(
-            val.name,
-            SubGraph {
-                key: val.name,
-                name,
-                url,
-                _p: PhantomData,
-            },
-        );
-    }
-
-    let graph: SGraph = Box::leak::<'static>(Box::new(graph));
 
     let router = axum::Router::new()
         .route("/", post(handler))

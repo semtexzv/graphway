@@ -1,11 +1,6 @@
 use crate::Variables;
-use graphql_parser::query::{
-    Definition, Document, FragmentDefinition, InlineFragment, OperationDefinition, Selection,
-    SelectionSet, VariableDefinition,
-};
+use graphql_parser::query::{SelectionSet, VariableDefinition};
 use graphql_parser::schema::Text;
-use std::collections::HashMap;
-use std::fmt::Debug;
 use std::hash::Hash;
 
 fn resolve_vars<'a, T: Text<'a>>(
